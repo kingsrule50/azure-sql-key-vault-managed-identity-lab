@@ -1,120 +1,206 @@
-# Azure SQL, Key Vault, and Managed Identity Lab
+# Azure SQL Modernization with Key Vault and Managed Identity
 
-This hands-on Azure portfolio lab modernizes a two-tier application by replacing an IaaS database virtual machine with Azure SQL Database. It secures the SQL administrator password in Azure Key Vault and lets the existing web VM retrieve that secret through a system-assigned managed identity and least-privilege Azure RBAC.
+[![Microsoft Azure](https://img.shields.io/badge/Microsoft_Azure-0078D4?logo=microsoftazure&logoColor=white)](https://azure.microsoft.com/)
+[![Azure SQL](https://img.shields.io/badge/Azure_SQL-0078D4?logo=microsoftsqlserver&logoColor=white)](https://azure.microsoft.com/products/azure-sql/database)
+[![Azure Key Vault](https://img.shields.io/badge/Azure_Key_Vault-512BD4?logo=microsoftazure&logoColor=white)](https://azure.microsoft.com/products/key-vault)
+[![Bash](https://img.shields.io/badge/Bash-121011?logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 
-## Project outcomes
+An Azure cloud engineering and security portfolio project that modernizes a two-tier application by retiring an IaaS database virtual machine and replacing it with Azure SQL Database. The solution moves the SQL administrator password into Azure Key Vault and uses a system-assigned managed identity, resource-scoped RBAC, TLS 1.2, and secure runtime validation.
 
-- Replaced a database VM with a managed Azure SQL Database.
-- Deployed the database on the low-cost Basic tier with 5 DTUs.
-- Restricted SQL public access to selected networks and required TLS 1.2.
-- Stored the SQL administrator password in Azure Key Vault without exposing its value.
-- Enabled a system-assigned managed identity on `vm-web-01`.
-- Granted the VM only the `Key Vault Secrets User` role at the vault scope.
-- Retrieved the secret at runtime without hardcoding credentials.
-- Completed an authenticated SQL query over an encrypted connection.
-- Reviewed Azure SQL DTU utilization in Azure Monitor.
-- Removed the token, password variable, and temporary Key Vault response after validation.
+This project extends the [Azure Secure 2-Tier Web Application Lab](https://github.com/kingsrule50/azure-secure-2tier-web-app-lab) and demonstrates a practical migration from VM-hosted infrastructure to a managed database service.
+
+## Executive Summary
+
+| Before | After |
+|---|---|
+| Database workload represented by `vm-db-01` | Managed database hosted in Azure SQL Database |
+| Additional VM, NIC, NSG, disk, and operating-system administration | Microsoft-managed database platform |
+| Application credentials vulnerable to being stored in scripts or configuration | SQL password stored in Azure Key Vault |
+| Static workload credentials required to access the vault | VM system-assigned managed identity |
+| Limited database-service telemetry | DTU utilization reviewed through Azure Monitor |
+
+The final design reduces infrastructure-management overhead, centralizes secret storage, limits Key Vault access through least-privilege RBAC, enforces encrypted SQL connectivity, and produces repeatable validation evidence.
 
 ## Architecture
 
 ```mermaid
-flowchart TB
-    VM["vm-web-01<br/>Ubuntu VM + managed identity"]
-    IMDS["Azure Instance Metadata Service"]
+flowchart LR
+    VM["vm-web-01<br/>Ubuntu VM"]
+    IMDS["Azure Instance<br/>Metadata Service"]
     KV["Azure Key Vault<br/>SqlAdminPassword"]
     SQL["Azure SQL Database<br/>sqldb-app"]
+    MON["Azure Monitor<br/>DTU metrics"]
 
-    VM -->|1. Request Key Vault token| IMDS
-    IMDS -->|2. Return identity token| VM
-    VM -->|3. Retrieve secret with RBAC| KV
-    VM -->|4. Connect with TLS 1.2| SQL
+    VM -->|Request identity token| IMDS
+    IMDS -->|Return Key Vault token| VM
+    VM -->|Read secret through RBAC| KV
+    VM -->|SQL authentication over TLS 1.2| SQL
+    SQL -->|Platform telemetry| MON
 ```
 
-The managed identity authenticates the VM to **Key Vault**. The SQL connection then uses SQL authentication with the password retrieved into memory. This lab does not claim that the managed identity authenticates directly to Azure SQL.
+The managed identity authenticates `vm-web-01` to **Azure Key Vault**. The database session uses SQL authentication with the password retrieved securely at runtime. These are separate authentication steps; the project does not claim that the managed identity signs in directly to Azure SQL.
 
-See [Architecture and security design](docs/architecture.md) for the complete flow and production improvements.
+See the [architecture and security design](docs/architecture.md) for the detailed runtime flow and production target state.
 
-## Azure resources
+## Azure Resources
 
-| Component | Purpose | Lab location |
+| Resource | Name / Configuration | Purpose |
 |---|---|---|
-| `vm-web-01` | Existing Ubuntu web VM retained from Lab 02 | East US |
-| `sqldb-app` | Managed application database | West US 2 |
-| `sql-server-kingsrule` | Azure SQL logical server | West US 2 |
-| `kv-lab03-kingsrule` | Stores `SqlAdminPassword` | East US |
-| System-assigned identity | Authenticates `vm-web-01` to Key Vault | Microsoft Entra ID |
+| Existing web VM | `vm-web-01` — Ubuntu 24.04 LTS | Application tier and validation host |
+| Azure SQL logical server | `sql-server-kingsrule` | Hosts the managed SQL database |
+| Azure SQL Database | `sqldb-app` — Basic, 5 DTUs | Managed application database |
+| Azure Key Vault | `kv-lab03-kingsrule` — Standard | Stores `SqlAdminPassword` |
+| System-assigned identity | Attached to `vm-web-01` | Passwordless VM authentication to Key Vault |
+| Azure RBAC assignment | `Key Vault Secrets User` at vault scope | Grants the VM read-only secret access |
+| Azure Monitor metric | DTU percentage, Max aggregation | Confirms database resource utilization |
 
-Azure SQL was deployed in West US 2 because the subscription did not permit the deployment in East US during the lab. Resource availability can differ by subscription.
+Azure SQL was deployed in West US 2 because the project subscription did not permit that deployment in East US at the time. The web VM and Key Vault were hosted in East US.
 
-## Security controls demonstrated
+## Security Design
 
-| Control | Implementation |
+### Managed Identity and Least Privilege
+
+- Enabled a system-assigned managed identity on `vm-web-01`.
+- Granted the identity only `Key Vault Secrets User` at the Key Vault resource scope.
+- Used `Key Vault Administrator` only for the human administrator who created and managed the secret.
+- Avoided service-principal client secrets and long-lived credentials for Key Vault access.
+
+![VM managed identity assigned the Key Vault Secrets User role](screenshots/10-vm-key-vault-secrets-user-role.png)
+
+### Secret Management
+
+- Stored the SQL administrator password as the `SqlAdminPassword` Key Vault secret.
+- Retrieved the secret at runtime through an OAuth token issued for the VM identity.
+- Prevented the secret value, access token, and connection string from appearing in the repository or screenshots.
+- Passed the password to `sqlcmd` through `SQLCMDPASSWORD` instead of a command-line argument.
+- Removed the password variable, token, and temporary Key Vault response when validation completed.
+
+![Key Vault secret created without exposing its value](screenshots/08-sql-admin-password-secret-created.png)
+
+### Network and Transport Security
+
+- Limited Azure SQL public access to selected networks for the project.
+- Configured a temporary workstation firewall rule only for required administration.
+- Required a minimum of TLS 1.2 on the Azure SQL logical server.
+- Requested encrypted connectivity with `sqlcmd -N` and verified the live session reported `Encrypted = TRUE`.
+
+![Azure SQL minimum TLS version configured as TLS 1.2](screenshots/04b-sql-server-tls-configuration.png)
+
+## Implementation Summary
+
+1. Captured the original two-tier environment and removed the database VM and its dependent resources.
+2. Retained `vm-web-01` as the application and validation host.
+3. Deployed `sqldb-app` on Azure SQL Database using the Basic 5-DTU tier.
+4. Restricted SQL network access and required TLS 1.2.
+5. Deployed Azure Key Vault with Azure RBAC authorization.
+6. Created `SqlAdminPassword` without displaying its value.
+7. Enabled the web VM's system-assigned managed identity.
+8. Assigned `Key Vault Secrets User` to the VM identity at the vault scope.
+9. Ran a Bash validation workflow from the VM to obtain a token, retrieve the secret, connect to SQL, verify encryption, and clean up sensitive variables.
+10. Reviewed Azure SQL DTU percentage in Azure Monitor and captured final deployment evidence.
+
+## Validation
+
+The validation workflow completed all of the following successfully:
+
+- Acquired a managed identity token for Azure Key Vault.
+- Retrieved `SqlAdminPassword` without printing its value.
+- Connected to `sqldb-app` using SQL authentication.
+- Returned the expected logical server, database, and login context.
+- Confirmed the active SQL session was encrypted.
+- Removed sensitive variables and the temporary Key Vault response.
+
+![Successful managed identity, Key Vault, and encrypted Azure SQL validation](screenshots/12-azure-sql-authenticated-connectivity-test.png)
+
+## Deployment Evidence
+
+### Database VM Decommissioning
+
+The original architecture contained both web and database VMs. After modernization, the web tier remained while the database VM and its dependent infrastructure were removed.
+
+![Resource group before database VM decommissioning](screenshots/01a-rg-2tier-web-before-db-decommissioning.png)
+
+![Resource group after database VM decommissioning](screenshots/01b-rg-2tier-web-after-db-decommissioning.png)
+
+### Azure SQL Database
+
+The managed database was deployed on the Basic tier and confirmed online.
+
+![Azure SQL Basic tier configuration](screenshots/02-sql-basic-tier-configuration.png)
+
+![Azure SQL Database online](screenshots/03-sql-database-deployed.png)
+
+### Key Vault and Workload Identity
+
+Azure RBAC was selected as the Key Vault permission model, and the web VM received a system-assigned identity for workload authentication.
+
+![Azure Key Vault RBAC permission model](screenshots/06-key-vault-rbac-configuration.png)
+
+![System-assigned identity enabled on vm-web-01](screenshots/09-vm-system-assigned-managed-identity.png)
+
+### Monitoring and Final State
+
+Azure Monitor displayed database DTU utilization, and the final resource group contained the Key Vault, SQL logical server, and SQL database.
+
+![Azure SQL DTU monitoring](screenshots/13-sql-database-dtu-monitoring.png)
+
+![Final Azure SQL and Key Vault resource group](screenshots/14-lab03-final-resource-group.png)
+
+## What This Project Demonstrates
+
+- Azure application and database modernization
+- IaaS-to-PaaS migration decision-making
+- Azure SQL Database deployment and administration
+- Azure Key Vault secret lifecycle management
+- Microsoft Entra workload identities
+- Azure RBAC and resource-scoped least privilege
+- Secure credential retrieval without hardcoding secrets
+- TLS configuration and encrypted-session verification
+- Bash automation and defensive secret handling
+- Azure Monitor performance metrics
+- Azure resource lifecycle and cost-conscious cleanup
+- Security evidence review and redaction before publication
+
+## Career Relevance
+
+| Target Role | Demonstrated Capability |
 |---|---|
-| Secret storage | SQL password stored in Azure Key Vault |
-| Workload authentication | System-assigned VM managed identity |
-| Least privilege | `Key Vault Secrets User` at the Key Vault resource scope |
-| Administrative access | User assigned `Key Vault Administrator` at the vault scope |
-| Encryption in transit | Azure SQL minimum TLS version set to 1.2; `sqlcmd -N` used |
-| Network restriction | SQL public access limited to selected networks for the lab |
-| Sensitive-data handling | Password and token are never printed and are removed after use |
-| Monitoring | Azure Monitor DTU percentage with Max aggregation |
+| Azure Cloud Engineer / Administrator | Modernized a VM-based database tier, deployed Azure SQL, configured networking, and monitored service utilization |
+| Cloud Security Engineer | Implemented Key Vault, workload identity, least-privilege RBAC, TLS enforcement, and secure secret handling |
+| Identity and Access Management Engineer | Used Microsoft Entra managed identity and resource-scoped role assignments for workload access |
+| DevOps / Platform Engineer | Built a reusable Bash validation workflow with environment-based configuration and cleanup controls |
+| Security or Compliance Analyst | Documented security controls, verified encryption, preserved evidence, and removed sensitive identifiers before publication |
 
-## Validation result
+## Scope
 
-The validation script obtained a Key Vault token through the VM managed identity, retrieved the password without displaying it, connected to Azure SQL, and verified that the active SQL session was encrypted.
+This is a hands-on portfolio implementation completed in a temporary Azure environment. It demonstrates the modernization and security controls but is not presented as a production-ready reference architecture.
 
-![Secure Azure SQL validation showing successful Key Vault retrieval and encrypted SQL authentication](screenshots/12-azure-sql-authenticated-connectivity-test.png)
+The project deliberately uses a SQL administrator password retrieved from Key Vault to demonstrate managed secret access. A stronger target state would use Microsoft Entra authentication directly with Azure SQL and eliminate the SQL password where application requirements permit.
 
-## Key evidence
-
-### Azure SQL Database deployed
-
-![Azure SQL Database overview showing the database online on the Basic tier](screenshots/03-sql-database-deployed.png)
-
-### Least-privilege access for the VM
-
-![Key Vault role assignment showing the VM managed identity as Key Vault Secrets User](screenshots/10-vm-key-vault-secrets-user-role.png)
-
-### Final Lab 03 resources
-
-![Resource group containing the Key Vault, SQL logical server, and SQL database](screenshots/14-lab03-final-resource-group.png)
-
-The complete screenshot set and descriptions are in the [evidence index](docs/evidence-index.md).
-
-## Documentation
-
-- [Student guide in Markdown](docs/student-guide.md)
-- [Downloadable Microsoft Word student guide](docs/Lab-03-Modernizing-to-Azure-SQL-and-Securing-Secrets-Student-Guide.docx)
-- [Architecture and security design](docs/architecture.md)
-- [Evidence index](docs/evidence-index.md)
-- [Security policy and safe-use guidance](SECURITY.md)
-
-## Repository structure
+## Repository Structure
 
 ```text
-.
-|-- README.md
-|-- SECURITY.md
-|-- docs/
-|   |-- architecture.md
-|   |-- evidence-index.md
-|   |-- student-guide.md
-|   `-- Lab-03-Modernizing-to-Azure-SQL-and-Securing-Secrets-Student-Guide.docx
-|-- screenshots/
-`-- scripts/
-    `-- validate-secure-sql.sh
+azure-sql-key-vault-managed-identity-lab/
+├── README.md
+├── SECURITY.md
+├── docs/
+│   └── architecture.md
+├── screenshots/
+│   └── Azure portal and validation evidence
+└── scripts/
+    └── validate-secure-sql.sh
 ```
 
-## Run the validation script
+## Validation Script
 
-The script is intended to run on the Azure VM after the resources, managed identity, RBAC role, SQL firewall, and `sqlcmd` have been configured.
+Run the script from the Azure VM after the managed identity, Key Vault RBAC assignment, SQL firewall, and `sqlcmd` have been configured:
 
 ```bash
 chmod 700 scripts/validate-secure-sql.sh
 ./scripts/validate-secure-sql.sh
 ```
 
-To reuse different resource names, set environment variables before running it:
+To reuse different resource names, set the environment variables before execution:
 
 ```bash
 export KEY_VAULT_NAME="<your-key-vault-name>"
@@ -124,25 +210,30 @@ export SQL_USERNAME="<your-sql-admin-login>"
 ./scripts/validate-secure-sql.sh
 ```
 
-The script never asks for or stores the SQL password in the repository. It retrieves the value directly from Key Vault at runtime.
+The password is retrieved directly from Key Vault at runtime and is not stored in the repository.
 
-## Production improvements
+## Production Improvements
 
-This is a temporary training lab. A production design should normally add:
+- Use private endpoints and private DNS for Azure SQL and Key Vault.
+- Replace SQL authentication with Microsoft Entra authentication where supported.
+- Enable Key Vault purge protection and restrict Key Vault network access.
+- Send diagnostic settings to Log Analytics and configure actionable alerts.
+- Deploy the architecture through Terraform or Bicep with CI/CD controls.
+- Add Azure Policy, tagging standards, resource locks, budgets, and access reviews.
+- Define backup retention, recovery objectives, and tested restoration procedures.
 
-- Private endpoints for Azure SQL and Key Vault.
-- Microsoft Entra authentication for Azure SQL instead of a SQL administrator password.
-- Key Vault purge protection and carefully scoped network access.
-- Diagnostic settings, centralized logging, alerts, and audited access reviews.
-- Infrastructure as Code, policy enforcement, backup requirements, and a tested recovery plan.
+## Related Project
 
-## Cleanup
+[Azure Secure 2-Tier Web Application Lab](https://github.com/kingsrule50/azure-secure-2tier-web-app-lab) — the original segmented IaaS environment with a public web tier and private database tier.
 
-The Lab 03 and Lab 02 resource groups were deleted after the screenshots and documentation were completed. Deleting `vm-web-01` also removed its system-assigned identity, and deleting the Key Vault removed the resource-scoped role assignments.
+## Key Takeaway
+
+This project demonstrates how Azure managed services and workload identity can reduce infrastructure overhead and credential exposure at the same time. The web VM authenticates to Key Vault without an embedded vault credential, receives only the permission required to read the database secret, and proves that the resulting Azure SQL session is encrypted.
 
 ## Author
 
-**Chinedu K. Asuzu**
-Azure Cloud Engineering and Security portfolio project
+**Chinedu K. Asuzu** | Azure Cloud & Security Professional
 
-> This repository is an educational lab. Names, regions, and example configurations should be adapted to the requirements of your own Azure environment.
+[GitHub](https://github.com/kingsrule50) | [LinkedIn](https://www.linkedin.com/in/chinedu-asuzu-cisa)
+
+Certifications: CISA | CompTIA Security+ | Microsoft SC-401

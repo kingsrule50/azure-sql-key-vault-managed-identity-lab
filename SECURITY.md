@@ -1,8 +1,8 @@
 # Security Policy
 
-## Educational scope
+## Project scope
 
-This repository documents a temporary Azure training environment. It contains no active credentials and should not be treated as a production deployment template.
+This repository documents a temporary Azure portfolio environment. It contains no active credentials and should not be treated as a production deployment template.
 
 ## Never commit
 
