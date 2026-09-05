@@ -1,0 +1,33 @@
+# Environment and local configuration
+.env
+.env.*
+!.env.example
+
+# Credentials and key material
+*.key
+*.pem
+*.pfx
+*.ppk
+id_rsa*
+id_ed25519*
+
+# Azure and Terraform local state
+.azure/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+
+# Temporary responses and logs
+keyvault-response.*
+*.log
+*.tmp
+*.bak
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
